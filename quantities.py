@@ -1,7 +1,7 @@
 """
 quantities.py — Quantity Engine MVP
-Estado: NÃO VALIDADO. A validação é correr os testes 1-7.
-Fonte única: SPECS-Core + F2.1 + decisões (a)(b)(c) + Afinações Finais.
+Estado: NÃO VALIDADO. A validação é correr os testes 1-8.
+Fonte única: SPECS-Core + F2.1 + decisões (a)(b)(c) + Afinações Finais + T8.
 """
 
 from fractions import Fraction
@@ -9,13 +9,25 @@ from decimal import Decimal, getcontext, ROUND_HALF_EVEN
 import hashlib, json, uuid
 
 REGISTRY = {
-    "kg":  ((Fraction(1), Fraction(0), Fraction(0)), Fraction(1)),
-    "m":   ((Fraction(0), Fraction(1), Fraction(0)), Fraction(1)),
-    "s":   ((Fraction(0), Fraction(0), Fraction(1)), Fraction(1)),
-    "N":   ((Fraction(1), Fraction(1), Fraction(-2)), Fraction(1)),
-    "lbf": ((Fraction(1), Fraction(1), Fraction(-2)),
-            Fraction(44482216152605, 10**13)),
+    "kg":          ((Fraction(1), Fraction(0), Fraction(0)), Fraction(1)),
+    "m":           ((Fraction(0), Fraction(1), Fraction(0)), Fraction(1)),
+    "s":           ((Fraction(0), Fraction(0), Fraction(1)), Fraction(1)),
+    "N":           ((Fraction(1), Fraction(1), Fraction(-2)), Fraction(1)),
+    "lbf":         ((Fraction(1), Fraction(1), Fraction(-2)),
+                    Fraction(44482216152605, 10**13)),
+    "L":           ((Fraction(0), Fraction(3), Fraction(0)), Fraction(1, 1000)),
+    "L/(100*km)":  ((Fraction(0), Fraction(2), Fraction(0)), Fraction(1, 10**8)),
 }
+
+# Bridges: (source_dim, target_dim) -> (missing_dim, suggested_unit, human_name)
+# A bridge exists when the operation is completable via exactly one additional operand.
+# If a bridge is not listed, the mismatch is unbridgeable.
+BRIDGES = {
+    ((Fraction(0), Fraction(3), Fraction(0)),
+     (Fraction(0), Fraction(2), Fraction(0))):
+        ((Fraction(0), Fraction(1), Fraction(0)), "km", "distance (Length)"),
+}
+
 CURRENCIES = {"USD", "EUR", "MZN", "GBP", "JPY"}
 ENGINE_VERSION = "1.0.0"
 
@@ -26,8 +38,21 @@ class QError(Exception):
         super().__init__(message)
 
 
+class DimensionMismatch(Exception):
+    def __init__(self, source_dim, target_dim, source_unit, target_unit):
+        self.source_dim = source_dim
+        self.target_dim = target_dim
+        self.source_unit = source_unit
+        self.target_unit = target_unit
+        super().__init__(
+            f"Dimension mismatch: {source_unit} -> {target_unit}"
+        )
+
+
 def parse_unit(s, registry=None):
     registry = registry or REGISTRY
+    if s in registry:
+        return registry[s]
     if any(c in s for c in "\u00b2\u00b3\u00b7\u00b5"):
         raise QError("INVALID_UNIT_NOTATION", f"Unicode not allowed: {s!r}")
     for i, c in enumerate(s):
@@ -83,8 +108,7 @@ def make_quantity(value, unit, registry=None):
 def cast_to(q, target_unit, registry=None):
     t_dim, _ = parse_unit(target_unit, registry)
     if t_dim != q.dim:
-        raise QError("INVALID_UNIT_CAST",
-                     f"Cannot cast {q.display_unit} -> {target_unit}")
+        raise DimensionMismatch(q.dim, t_dim, q.display_unit, target_unit)
     return Quantity(q.value_si, t_dim, target_unit)
 
 
@@ -107,7 +131,12 @@ def resolve(x, steps, registry=None):
         if "as" not in x:
             raise QError("MISSING_UNIT_DECLARATION",
                          f"Reference '{x['ref']}' used without 'as'")
-        return cast_to(steps[x["ref"]], x["as"], registry)
+        try:
+            return cast_to(steps[x["ref"]], x["as"], registry)
+        except DimensionMismatch:
+            q = steps[x["ref"]]
+            raise QError("INVALID_UNIT_CAST",
+                         f"Cannot cast {q.display_unit} -> {x['as']}")
     return make_quantity(x["value"], x["unit"], registry)
 
 
@@ -121,7 +150,6 @@ def operation_hash(ops, precision):
 
 
 def unit_definition_hash(name, registry):
-    """Hash content-addressed: inclui hashes das unidades referenciadas."""
     dim, factor = registry[name]
     payload = canonical_json({
         "name": name,
@@ -137,9 +165,12 @@ def collect_used_units(ops):
         for side in ("a", "b"):
             x = op.get(side)
             if isinstance(x, dict) and "unit" in x:
-                for tok in x["unit"].replace("*", " ").replace("/", " ").split():
-                    if "^" in tok: tok = tok.rsplit("^", 1)[0]
-                    if tok in REGISTRY: used.add(tok)
+                if x["unit"] in REGISTRY:
+                    used.add(x["unit"])
+                else:
+                    for tok in x["unit"].replace("*", " ").replace("/", " ").split():
+                        if "^" in tok: tok = tok.rsplit("^", 1)[0]
+                        if tok in REGISTRY: used.add(tok)
         if "to" in op and op["to"] in REGISTRY:
             used.add(op["to"])
         if isinstance(op.get("a"), dict) and "as" in op["a"]:
@@ -168,14 +199,12 @@ def execute(ops, precision=None, registry=None, refdata=None):
     steps = {}
     for op in ops:
         try:
-            # --- Fronteira de domínio: Money primeiro, dimensional depois ---
             if op["op"] == "convert":
                 target = op["to"]
                 a_unit = None
                 if isinstance(op["a"], dict) and "unit" in op["a"]:
                     a_unit = op["a"]["unit"]
 
-                # Caso 1: origem é moeda
                 if a_unit and a_unit.upper() in CURRENCIES:
                     if "at" not in op:
                         return {"status": "NEEDS_REFERENCE_DATA",
@@ -184,7 +213,6 @@ def execute(ops, precision=None, registry=None, refdata=None):
                                     {"name": "at", "type": "ISO8601_timestamp"}]}
                     raise QError("NOT_IMPLEMENTED", "FX not implemented")
 
-                # Caso 2: destino é moeda (origem dimensional)
                 if target.upper() in CURRENCIES:
                     if "at" not in op:
                         return {"status": "NEEDS_REFERENCE_DATA",
@@ -193,7 +221,6 @@ def execute(ops, precision=None, registry=None, refdata=None):
                                     {"name": "at", "type": "ISO8601_timestamp"}]}
                     raise QError("NOT_IMPLEMENTED", "FX not implemented")
 
-                # Caso 3: conversão dimensional normal
                 a = resolve(op["a"], steps, registry)
                 steps[op["id"]] = cast_to(a, target, registry)
 
@@ -204,6 +231,28 @@ def execute(ops, precision=None, registry=None, refdata=None):
 
             else:
                 raise QError("UNKNOWN_OP", op["op"])
+
+        except DimensionMismatch as dm:
+            key = (dm.source_dim, dm.target_dim)
+            if key in BRIDGES:
+                missing_dim, suggestion, human_name = BRIDGES[key]
+                return {
+                    "status": "NEEDS_CLARIFICATION",
+                    "error_code": "DIMENSION_MISMATCH_REQUIRES_CONTEXT",
+                    "message": (f"Cannot convert '{dm.source_unit}' to "
+                                f"'{dm.target_unit}'. Missing {human_name} "
+                                f"to bridge dimensions."),
+                    "clarification_needed": {
+                        "missing_dimension": [str(x) for x in missing_dim],
+                        "suggested_unit": suggestion,
+                    },
+                }
+            return {
+                "status": "ERROR",
+                "error_code": "DIMENSION_MISMATCH_UNBRIDGEABLE",
+                "message": (f"Cannot convert '{dm.source_unit}' to "
+                            f"'{dm.target_unit}'."),
+            }
 
         except QError as e:
             return {"status": "ERROR", "error_code": e.code, "message": e.message}
@@ -311,7 +360,7 @@ def test_7_registry_change_surgical():
     r1 = execute(CASO_4, precision=PRECISION)
     modified = dict(REGISTRY)
     modified["lbf"] = ((Fraction(1), Fraction(1), Fraction(-2)),
-                       Fraction(45, 10))  # valor errado de propósito
+                       Fraction(45, 10))
     r2 = execute(CASO_4, precision=PRECISION, registry=modified)
     h1 = r1["evidence"]
     h2 = r2["evidence"]
@@ -324,6 +373,16 @@ def test_7_registry_change_surgical():
     print("T7 PASS  mudou apenas:", diff)
 
 
+def test_8_needs_clarification_bridge():
+    ops = [{"id": "s0", "op": "convert",
+            "a": {"value": 50, "unit": "L"}, "to": "L/(100*km)"}]
+    r = execute(ops)
+    assert r["status"] == "NEEDS_CLARIFICATION", r
+    assert r["error_code"] == "DIMENSION_MISMATCH_REQUIRES_CONTEXT", r
+    assert r["clarification_needed"]["suggested_unit"] == "km", r
+    print("T8 PASS", r["error_code"])
+
+
 if __name__ == "__main__":
     test_1_mul()
     test_2_cast_noop()
@@ -332,4 +391,5 @@ if __name__ == "__main__":
     test_5_fx_no_at()
     test_6_hash_reproducible()
     test_7_registry_change_surgical()
+    test_8_needs_clarification_bridge()
     print("\nALL TESTS PASSED")
