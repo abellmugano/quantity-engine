@@ -1,0 +1,57 @@
+{
+  "name": "quantity_execute",
+  "description": "Execute dimensional calculation and unit conversion with audit evidence. Input: sequence of typed operations (mul, convert). Output: result value with unit, precision metadata, and reproducibility hash, or a structured failure.",
+  "input_schema": {
+    "type": "object",
+    "required": ["operations"],
+    "properties": {
+      "operations": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["id", "op"],
+          "properties": {
+            "id": {"type": "string"},
+            "op": {"enum": ["mul", "convert"]},
+            "a": {"$ref": "#/$defs/operand"},
+            "b": {"$ref": "#/$defs/operand", "description": "Required for mul"},
+            "to": {"type": "string", "description": "Target unit (for convert)"},
+            "at": {"type": "string", "description": "ISO8601 UTC (required for currency)"}
+          }
+        }
+      },
+      "precision": {
+        "type": "object",
+        "properties": {
+          "mode": {"enum": ["HALF_EVEN", "HALF_UP"], "default": "HALF_EVEN"},
+          "scale": {"type": "integer", "default": 10}
+        }
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["status"],
+    "properties": {
+      "status": {"enum": ["SUCCESS", "NEEDS_REFERENCE_DATA", "ERROR"]},
+      "result_id": {"type": "string"},
+      "value": {"type": "string", "description": "Decimal string (present if SUCCESS)"},
+      "unit": {"type": "string"},
+      "exactness": {"enum": ["EXACT", "APPROXIMATED"]},
+      "approximation": {"type": "object", "description": "Present if APPROXIMATED"},
+      "error_code": {"type": "string"},
+      "message": {"type": "string"},
+      "evidence": {"type": "object", "description": "operation_hash, full_evidence_hash, used_unit_definitions, engine_version"}
+    }
+  },
+  "$defs": {
+    "operand": {
+      "oneOf": [
+        {"type": "object", "required": ["value", "unit"],
+         "properties": {"value": {"type": "number"}, "unit": {"type": "string"}}},
+        {"type": "object", "required": ["ref", "as"],
+         "properties": {"ref": {"type": "string"}, "as": {"type": "string"}}}
+      ]
+    }
+  }
+}
