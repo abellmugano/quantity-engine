@@ -1,0 +1,15 @@
+{
+  "mcpb_version": "0.1",
+  "name": "quantity-engine",
+  "version": "1.0.0",
+  "description": "Dimensional calculation and unit conversion with audit evidence",
+  "author": "abellmugano",
+  "server": {
+    "type": "python",
+    "entry_point": "mcp_server.py",
+    "mcp_config": {
+      "command": "python",
+      "args": ["mcp_server.py"]
+    }
+  }
+}

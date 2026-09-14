@@ -1,0 +1,9 @@
+name: quantity-engine
+description: Dimensional calculation and unit conversion with audit evidence
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties: {}
+  commandFunction: |-
+    (config) => ({ command: "python", args: ["mcp_server.py"] })
