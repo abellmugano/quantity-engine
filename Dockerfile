@@ -1,20 +1,10 @@
-FROM python:3.11-slim
-
-# Non-root user for safety checks
-RUN useradd --create-home --shell /bin/bash app
-
+FROM debian:trixie-slim
+ENV DEBIAN_FRONTEND=noninteractive \
+    GLAMA_VERSION="1.0.0" \
+    PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git && curl -fsSL https://deb.nodesource.com/setup_26.x | bash - && apt-get install -y --no-install-recommends nodejs && npm install -g mcp-proxy@6.7.16 pnpm@10.14.0 && node --version && curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR="/usr/local/bin" sh && uv python install 3.14 --default --preview && ln -s $(uv python find) /usr/local/bin/python && python --version && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 WORKDIR /app
-
-# Install deps first (better layer caching)
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy source
-COPY quantities.py tool.json mcp_server.py ./
-
-# Own the files as app user
-RUN chown -R app:app /app
-USER app
-
-# MCP stdio server — talks via stdin/stdout, no ports
-CMD ["python", "mcp_server.py"]
+RUN git clone https://github.com/abellmugano/quantity-engine . && git checkout db403aeff80894ae7b8fdc2cc27b6b92fe42e128
+RUN python -m ensurepip --upgrade && python -m pip install --no-cache-dir -r requirements.txt
+ENV PATH="/app/node_modules/.bin:$PATH"
+CMD ["mcp-proxy","--","python","mcp_server.py"]
