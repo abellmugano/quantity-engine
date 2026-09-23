@@ -1,6 +1,6 @@
 {
   "name": "quantity_execute",
-  "description": "Execute dimensional calculation and unit conversion with audit evidence. Input: sequence of typed operations (mul, convert). Output: result value with unit, precision metadata, and reproducibility hash, or a structured failure.",
+  "description": "Execute dimensional calculation and unit conversion with audit evidence. Input: sequence of typed operations (mul, add, sub, div, convert). Output: result value with unit, precision metadata, and reproducibility hash, or a structured failure.",
   "input_schema": {
     "type": "object",
     "required": ["operations"],
@@ -12,9 +12,9 @@
           "required": ["id", "op"],
           "properties": {
             "id": {"type": "string"},
-            "op": {"enum": ["mul", "convert"]},
+            "op": {"enum": ["mul", "add", "sub", "div", "convert"]},
             "a": {"$ref": "#/$defs/operand"},
-            "b": {"$ref": "#/$defs/operand", "description": "Required for mul"},
+            "b": {"$ref": "#/$defs/operand", "description": "Required for mul, add, sub, div"},
             "to": {"type": "string", "description": "Target unit (for convert)"},
             "at": {"type": "string", "description": "ISO8601 UTC (required for currency)"}
           }
@@ -33,7 +33,7 @@
     "type": "object",
     "required": ["status"],
     "properties": {
-      "status": {"enum": ["SUCCESS", "NEEDS_REFERENCE_DATA", "ERROR"]},
+      "status": {"enum": ["SUCCESS", "NEEDS_REFERENCE_DATA", "NEEDS_CLARIFICATION", "ERROR"]},
       "result_id": {"type": "string"},
       "value": {"type": "string", "description": "Decimal string (present if SUCCESS)"},
       "unit": {"type": "string"},
@@ -41,6 +41,8 @@
       "approximation": {"type": "object", "description": "Present if APPROXIMATED"},
       "error_code": {"type": "string"},
       "message": {"type": "string"},
+      "clarification_needed": {"type": "object", "description": "Present if NEEDS_CLARIFICATION"},
+      "required_params": {"type": "array", "description": "Present if NEEDS_REFERENCE_DATA"},
       "evidence": {"type": "object", "description": "operation_hash, full_evidence_hash, used_unit_definitions, engine_version"}
     }
   },

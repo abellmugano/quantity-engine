@@ -1,7 +1,9 @@
 """
-quantities.py — Quantity Engine MVP
-Estado: NÃO VALIDADO. A validação é correr os testes 1-8.
-Fonte única: SPECS-Core + F2.1 + decisões (a)(b)(c) + Afinações Finais + T8.
+quantities.py — Quantity Engine MVP v1.1.0
+Estado: Álgebra fechada (mul, add, sub, div, convert) sobre o modelo dimensional existente.
+        Sem redução automática de unidades compostas.
+        BRIDGES e NEEDS_CLARIFICATION preservados da v1.0.0.
+Fonte única: SPECS-Core + F2.1 + decisões (a)(b)(c) + Afinações Finais + T8 + álgebra fechada.
 """
 
 from fractions import Fraction
@@ -29,7 +31,7 @@ BRIDGES = {
 }
 
 CURRENCIES = {"USD", "EUR", "MZN", "GBP", "JPY"}
-ENGINE_VERSION = "1.0.0"
+ENGINE_VERSION = "1.1.0"
 
 
 class QError(Exception):
@@ -94,6 +96,34 @@ class Quantity:
             tuple(a + b for a, b in zip(self.dim, other.dim)),
             f"{self.display_unit}*{other.display_unit}",
         )
+
+    def add(self, other):
+        if self.dim != other.dim:
+            raise DimensionMismatch(self.dim, other.dim,
+                                    self.display_unit, other.display_unit)
+        return Quantity(self.value_si + other.value_si,
+                        self.dim, self.display_unit)
+
+    def sub(self, other):
+        if self.dim != other.dim:
+            raise DimensionMismatch(self.dim, other.dim,
+                                    self.display_unit, other.display_unit)
+        return Quantity(self.value_si - other.value_si,
+                        self.dim, self.display_unit)
+
+    def div(self, other):
+        if other.value_si == 0:
+            raise QError("DIVISION_BY_ZERO", "Division by zero")
+        new_dim = tuple(a - b for a, b in zip(self.dim, other.dim))
+        if all(d == 0 for d in new_dim):
+            new_display = ""
+        elif not other.display_unit:
+            new_display = self.display_unit
+        elif not self.display_unit:
+            new_display = f"/{other.display_unit}"
+        else:
+            new_display = f"{self.display_unit}/{other.display_unit}"
+        return Quantity(self.value_si / other.value_si, new_dim, new_display)
 
     def value_in_display(self, registry=None):
         _, f = parse_unit(self.display_unit, registry)
@@ -228,6 +258,21 @@ def execute(ops, precision=None, registry=None, refdata=None):
                 a = resolve(op["a"], steps, registry)
                 b = resolve(op["b"], steps, registry)
                 steps[op["id"]] = a.mul(b)
+
+            elif op["op"] == "add":
+                a = resolve(op["a"], steps, registry)
+                b = resolve(op["b"], steps, registry)
+                steps[op["id"]] = a.add(b)
+
+            elif op["op"] == "sub":
+                a = resolve(op["a"], steps, registry)
+                b = resolve(op["b"], steps, registry)
+                steps[op["id"]] = a.sub(b)
+
+            elif op["op"] == "div":
+                a = resolve(op["a"], steps, registry)
+                b = resolve(op["b"], steps, registry)
+                steps[op["id"]] = a.div(b)
 
             else:
                 raise QError("UNKNOWN_OP", op["op"])
@@ -383,6 +428,71 @@ def test_8_needs_clarification_bridge():
     print("T8 PASS", r["error_code"])
 
 
+# ==================== TESTES v1.1.0 — ÁLGEBRA FECHADA ====================
+
+def test_9_add_same_dim():
+    ops = [{"id": "s0", "op": "add",
+            "a": {"value": 5, "unit": "m"},
+            "b": {"value": 30, "unit": "m"}}]
+    r = execute(ops)
+    assert r["status"] == "SUCCESS", r
+    assert r["exactness"] == "EXACT", r
+    assert r["value"] == "35.0000000000", r
+    print("T9 PASS", r["value"])
+
+
+def test_10_sub_same_dim():
+    ops = [{"id": "s0", "op": "sub",
+            "a": {"value": 5, "unit": "N"},
+            "b": {"value": 2, "unit": "N"}}]
+    r = execute(ops)
+    assert r["status"] == "SUCCESS", r
+    assert r["value"] == "3.0000000000", r
+    print("T10 PASS", r["value"])
+
+
+def test_11_add_dim_mismatch():
+    ops = [{"id": "s0", "op": "add",
+            "a": {"value": 5, "unit": "m"},
+            "b": {"value": 2, "unit": "s"}}]
+    r = execute(ops)
+    assert r["status"] == "ERROR", r
+    assert r["error_code"] == "DIMENSION_MISMATCH_UNBRIDGEABLE", r
+    print("T11 PASS", r["error_code"])
+
+
+def test_12_div_derives_dim():
+    ops = [{"id": "s0", "op": "div",
+            "a": {"value": 10, "unit": "N"},
+            "b": {"value": 2, "unit": "s"}}]
+    r = execute(ops)
+    assert r["status"] == "SUCCESS", r
+    assert r["unit"] == "N/s", r
+    assert r["value"] == "5.0000000000", r
+    print("T12 PASS", r["value"], r["unit"])
+
+
+def test_13_div_same_dim_is_dimensionless():
+    ops = [{"id": "s0", "op": "div",
+            "a": {"value": 10, "unit": "m"},
+            "b": {"value": 2, "unit": "m"}}]
+    r = execute(ops)
+    assert r["status"] == "SUCCESS", r
+    assert r["unit"] == "", r
+    assert r["value"] == "5.0000000000", r
+    print("T13 PASS", r["value"], "(dimensionless)")
+
+
+def test_14_div_by_zero():
+    ops = [{"id": "s0", "op": "div",
+            "a": {"value": 10, "unit": "m"},
+            "b": {"value": 0, "unit": "s"}}]
+    r = execute(ops)
+    assert r["status"] == "ERROR", r
+    assert r["error_code"] == "DIVISION_BY_ZERO", r
+    print("T14 PASS", r["error_code"])
+
+
 if __name__ == "__main__":
     test_1_mul()
     test_2_cast_noop()
@@ -392,4 +502,10 @@ if __name__ == "__main__":
     test_6_hash_reproducible()
     test_7_registry_change_surgical()
     test_8_needs_clarification_bridge()
-    print("\nALL TESTS PASSED")
+    test_9_add_same_dim()
+    test_10_sub_same_dim()
+    test_11_add_dim_mismatch()
+    test_12_div_derives_dim()
+    test_13_div_same_dim_is_dimensionless()
+    test_14_div_by_zero()
+    print("\nALL TESTS PASSED (v1.1.0) — 14 tests")
