@@ -1,13 +1,20 @@
-FROM debian:trixie-slim
-ENV DEBIAN_FRONTEND=noninteractive \
-    GLAMA_VERSION="1.1.0" \
+FROM node:22-slim AS proxy
+RUN npm install -g mcp-proxy@6.7.16
+
+FROM python:3.12-slim
+ENV GLAMA_VERSION="1.1.0" \
     PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git && curl -fsSL https://deb.nodesource.com/setup_26.x | bash - && apt-get install -y --no-install-recommends nodejs && npm install -g mcp-proxy@6.7.16 pnpm@10.14.0 && node --version && curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR="/usr/local/bin" sh && uv python install 3.14 --default --preview && ln -s $(uv python find) /usr/local/bin/python && python --version && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+# mcp-proxy (Node) ships in a separate stage so the runtime image needs no
+# apt/npm at build time. The previous Dockerfile re-cloned the repo at a
+# hard-pinned SHA (db403ae, v1.0.0), so directory builds introspected the old
+# tool schema (mul, convert) long after v1.1.0 shipped add/sub/div. Building
+# from the build context keeps the image on the commit Glama indexes.
+COPY --from=proxy /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=proxy /usr/local/bin/node /usr/local/bin/node
+RUN ln -s /usr/local/lib/node_modules/mcp-proxy/dist/index.js /usr/local/bin/mcp-proxy \
+    && node --version
 WORKDIR /app
-# Track the default branch. The previous hard-pinned SHA (db403ae) made
-# directory builds introspect v1.0.0 (tools: mul, convert) long after v1.1.0
-# shipped add/sub/div, so the published listing showed a stale tool schema.
-RUN git clone --depth 1 https://github.com/abellmugano/quantity-engine .
-RUN python -m ensurepip --upgrade && python -m pip install --no-cache-dir -r requirements.txt
-ENV PATH="/app/node_modules/.bin:$PATH"
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
 CMD ["mcp-proxy","--","python","mcp_server.py"]
